@@ -1,0 +1,127 @@
+
+cd /usr/local/src
+
+wget https://www.python.org/ftp/python/3.10.13/Python-3.10.13.tgz
+
+wget https://www.python.org/ftp/python/3.9.18/Python-3.9.18.tgz
+
+wget https://www.python.org/ftp/python/3.8.18/Python-3.8.18.tgz <---- 10.16.16.160 세팅
+
+wget https://www.python.org/ftp/python/3.7.17/Python-3.7.17.tgz
+
+wget https://www.python.org/ftp/python/3.9.7/Python-3.9.7.tgz
+
+
+tar -xzf Python-3.9.7.tgz
+
+./configure --enable-optimizations
+
+sudo make altinstall
+
+# vi /etc/systemd/system/fastapi38.service
+'''
+[Unit]
+Description=FastAPI 3.8.18 Application
+
+[Service]
+User=incar
+Group=incar
+WorkingDirectory=/home/project/fastapi38/app
+ExecStart=/home/project/fastapi38/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+'''
+
+sudo systemctl start fastapi38
+sudo systemctl enable fastapi38
+=====================================================
+
+pip install virtualenv
+
+virtualenv <name> -p python3.8.10
+
+cd <name>/Scripts
+
+source activate
+
+cd ..
+
+vi main.py
+'''
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.get("/")
+def read_root():
+    return {"message": "Hello, World!"}
+'''
+
+uvicorn main:app
+
+git clone git@16.16.16.200:it_service/FastAPI.git app
+
+mkdir logs
+
+rm main.py
+
+cd app
+
+uvicorn main:app
+
+
+deactivate
+
+pip freeze > requirements.txt
+
+pip install -r requirements.txt
+
+=====================================================
+개발계 
+마스터 브랜치로 생성되면 변경
+git branch -m master main
+git fetch origin
+git branch -u origin/main main
+
+git branch develop
+git checkout develop
+git branch -u origin/develop develop
+
+반복되는 사이클 시작
+git branch feature
+git push origin feature
+
+git add .
+git commit -m "update file"
+git push --set-upstream origin feature
+
+PR 요청후 PR병합이 완료되면 사용이 끝난 브랜치 삭제 
+git branch -D feature
+git push origin -d feature
+
+git checkout develop
+git pull origin develop
+
+반복되는 사이클 끝
+
+git branch feature2
+git push origin feature2
+
+git add .
+git commit -m "update file"
+git push --set-upstream origin feature2
+
+git checkout develop
+git pull origin develop
+
+======================================================
+운영계
+git checkout develop
+git pull origin develop
+
+git checkout main
+git merge develop
+git push origin main
+======================================================
