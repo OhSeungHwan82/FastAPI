@@ -1,4 +1,4 @@
-# FastAPI 환경구성
+# FastAPI 환경구성.
 
 ## 1. cx_Oracle 를 설치 FastAPI 사용
   FastAPI uvicorn cx_Oracle 설치
@@ -37,3 +37,4 @@
     python -m pip install oracledb --upgrade
 ## 5. API 문서 제공
   http://localhost:8000/docs
+
