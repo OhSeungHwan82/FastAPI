@@ -3,6 +3,7 @@ from jose import jwt
 from app.database.orcl import DbLink
 from fastapi import HTTPException
 from datetime import date, datetime, timedelta
+from cx_Oracle import DatabaseError as OracleError
 
 class UserService:
     encoding:str = "UTF-8"
@@ -36,7 +37,6 @@ class UserService:
 
     def get_regist_info(self,code:str):
         db = DbLink()
-
         try:
             qry = """select create_by as sawon_cd from inlinecode where code=:password
         """
@@ -44,17 +44,17 @@ class UserService:
             db.execute(qry , bind_arr)
             fields = db.get_field_names()
             datas = db.get_datas()
-            sawon_cd = ''.join(map(str,datas[0]))
-
+            sawon_cd = str(datas[0][0])#''.join(map(str,datas[0]))
             if sawon_cd=="":
                 return_msg = "접속정보가 올바르지 않습니다."
                 return return_msg
             else:
                 return sawon_cd
 
-        except Exception as e:
+        except OracleError as e:
             print("예외발생",e)
             db.close()
-            return False
+            raise HTTPException(status_code=404, detail="get_regist_info"+qry+"/"+code)
+            #return False
         db.close()
 
