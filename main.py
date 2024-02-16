@@ -14,9 +14,10 @@ from app.routers.userInfo import userInfo_router
 from app.routers.ledgerDatabase import ledgerDatabase_router
 from app.routers.dbe import dbe_router
 from app.routers.public import public_router
+from app.routers.batchJob import batchJob_router
 
 from apscheduler.schedulers.background import BackgroundScheduler
-from app.service.scheduled_task import scheduled_task
+from app.service.scheduled_task import scheduled_task, batchJob_scheduled_task
 
 app = FastAPI()
 
@@ -37,7 +38,10 @@ def read_app_root():
     return {"message": "Hello from App"}
 #####################원장변경 스케줄러#############################
 scheduler = BackgroundScheduler()
-scheduler.add_job(scheduled_task, 'interval', minutes=1)
+scheduler.add_job(scheduled_task, 'interval', minutes=5)
+##################################################################
+#####################배치관리 스케줄러#############################
+scheduler.add_job(batchJob_scheduled_task, 'interval', minutes=4)
 ##################################################################
 
 #################################### docs 구성 변경##########################################################
@@ -58,6 +62,7 @@ def custom_openapi():
 		{"name": "devSample", "tags": ["devSample"]},
         {"name": "ledgerDatabase", "tags": ["ledgerDatabase"]},
         {"name": "public", "tags": ["public"]},
+        {"name": "batchJob", "tags": ["batchJob"]},
     ]
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -71,7 +76,7 @@ app.include_router(giteaApi_router.router, tags=["giteaApi"])
 app.include_router(devSample_router.router, tags=["devSample"])
 app.include_router(userInfo_router.router, tags=["userInfo"])
 app.include_router(ledgerDatabase_router.router, tags=["ledgerDatabase"])
-
+app.include_router(batchJob_router.router, tags=["batchJob"])
 app.include_router(insuproductcompare_router.router)
 app.include_router(incarInfo_router.router)
 app.include_router(dbe_router.router, tags=["dbe"])
