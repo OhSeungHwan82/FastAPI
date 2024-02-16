@@ -5,6 +5,7 @@ from jose import jwt
 from datetime import date, datetime, timedelta
 from . import security as sc
 from fastapi.responses import JSONResponse
+from cx_Oracle import DatabaseError as OracleError
 
 router = APIRouter(prefix="/api/userInfo")
 
@@ -38,48 +39,84 @@ jwt_algorithm:str = "HS256"
 )
 def user_log_in(userInfo:LogIn):
 	db = DbLink()
-
-	try:
-		qry = """select count(*) cnt from inlinecode where create_by = :sawon_cd and code=:password and expire_date>sysdate
-	"""
-		bind_arr = {"sawon_cd":userInfo.sawon_cd,"password":userInfo.password}
-		db.execute(qry , bind_arr)
-		fields = db.get_field_names()
-		datas = db.get_datas()
-		total_rec = datas[0][0]
-		if total_rec == 0:
-			#return_msg = "접속정보가 올바르지 않습니다."
-			#return return_msg
-			raise HTTPException(status_code=404, detail="1111Login Error"+userInfo.sawon_cd+"/"+userInfo.password)
-		else:
-			access_token = jwt.encode(
-            {
-                "sub":userInfo.password,
-                "exp":datetime.now()+timedelta(hours=4)
-            }, 
-            secret_key, 
-            algorithm=jwt_algorithm
-            )
+	# qry = "select to_char(sysdate,'yyyymmddhh24miss') sysdt from dual"
+	# db.execute(qry , {})
+	# fields = db.get_field_names()
+	# datass = db.get_datas()
+	# sysdt = datass[0][0]
+	# try:
+		
+	# 	qry = """select count(*) cnt from inlinecode where create_by = :sawon_cd and code=:password and expire_date>sysdate
+	# """
+	# 	bind_arr = {"sawon_cd":userInfo.sawon_cd,"password":userInfo.password}
+	# 	db.execute(qry , bind_arr)
+	# 	fields = db.get_field_names()
+	# 	datas = db.get_datas()
+	# 	total_rec = datas[0][0]
+	# 	if total_rec == 0:
+	# 		#return_msg = "접속정보가 올바르지 않습니다."
+	# 		#return return_msg
+	# 		raise HTTPException(status_code=404, detail="1111Login Error"+userInfo.sawon_cd+"/"+userInfo.password)
+	# 	else:
+	# 		access_token = jwt.encode(
+    #         {
+    #             "sub":userInfo.password,
+    #             "exp":datetime.now()+timedelta(hours=4)
+    #         }, 
+    #         secret_key, 
+    #         algorithm=jwt_algorithm
+    #         )
 			
-			return {
-                "message":"사용자 로그인에 성공했습니다",
-                "data":{
-                    "accessToken": access_token,
-                    "userInfo":{
-                        "sawon_cd":userInfo.sawon_cd
-                    }
-                }
-            }
+	# 		return {
+    #             "message":"사용자 로그인에 성공했습니다",
+    #             "data":{
+    #                 "accessToken": access_token,
+    #                 "userInfo":{
+    #                     "sawon_cd":userInfo.sawon_cd
+    #                 }
+    #             }
+    #         }
 
-	except HTTPException as he:
-		print("HTTP에러", he)
-		db.close()
-		raise HTTPException(status_code=404, detail="222Login Error"+userInfo.sawon_cd+"/"+userInfo.password)
-	except Exception as e:
-		print("예외발생",e)
-		db.close()
-		return False
-
+	# except OracleError as e:
+	# 	print("HTTP에러", e)
+	# 	db.close()
+	# 	raise HTTPException(status_code=404, detail="222Login Error"+userInfo.sawon_cd+"/"+userInfo.password)
+	# except HTTPException as e:
+	# 	print("예외발생",e)
+	# 	db.close()
+	# 	raise HTTPException(status_code=404, detail="333Login Error"+userInfo.sawon_cd+"/"+userInfo.password+"/"+sysdt)
+	# 	#return False
+	print("userInfo",userInfo.sawon_cd,userInfo.password)
+	qry = """select count(*) cnt from inlinecode where create_by = :sawon_cd and code=:password and expire_date>sysdate
+	"""
+	bind_arr = {"sawon_cd":userInfo.sawon_cd,"password":userInfo.password}
+	db.execute(qry , bind_arr)
+	fields = db.get_field_names()
+	datas = db.get_datas()
+	total_rec = datas[0][0]
+	if total_rec == 0:
+		#return_msg = "접속정보가 올바르지 않습니다."
+		#return return_msg
+		raise HTTPException(status_code=404, detail="1111Login Error"+userInfo.sawon_cd+"/"+userInfo.password)
+	else:
+		access_token = jwt.encode(
+		{
+			"sub":userInfo.password,
+			"exp":datetime.now()+timedelta(hours=4)
+		}, 
+		secret_key, 
+		algorithm=jwt_algorithm
+		)
+		
+		return {
+			"message":"사용자 로그인에 성공했습니다",
+			"data":{
+				"accessToken": access_token,
+				"userInfo":{
+					"sawon_cd":userInfo.sawon_cd
+				}
+			}
+		}
 	db.close()
 
 @router.post("/access_token_test")
