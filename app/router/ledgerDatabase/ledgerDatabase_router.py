@@ -10,6 +10,8 @@ from fastapi.responses import FileResponse
 from app.models.ledgerDatabaseModels import CreateRequest, UpdateRequest, CreateReviveRequest
 from app.service.user import UserService
 from app.routers.userInfo import security as sc
+from app.config.settings import root_dir
+
 from decimal import Decimal
 import json
 import sys
@@ -112,14 +114,27 @@ def getlist(
 						inner join public.commcode   b on a.status_cd  = b.code_id and b.cl_code = 1
 				where  a.use_yb = '1'
 					"""
-
-		if gubun != "0" and search:
-			if gubun == "1":
+		if gubun :
+			if gubun == "0" and search:
+				qry += " and jubsu_no = %s or title like %s "
+				params.append(search)
+				search = "%"+search+"%"
+				params.append(search)
+			if gubun == "1" and search:
 				qry += " and jubsu_no = %s "
-			if gubun == "2":
+				params.append(search)
+			if gubun == "2" and search:
 				qry += " and title like %s "
 				search = "%"+search+"%"
-			params.append(search)
+				params.append(search)
+
+		# if gubun != "0" and search:
+		# 	if gubun == "1":
+		# 		qry += " and jubsu_no = %s "
+		# 	if gubun == "2":
+		# 		qry += " and title like %s "
+		# 		search = "%"+search+"%"
+		# 	params.append(search)
 
 		qry += " order by a.pk desc limit %s offset (%s - 1) * %s"
 		params.extend([limit, page, limit])
@@ -214,7 +229,6 @@ def getdetail(
 				result['authCreate'] = True
 			if result['response_sql'] or result['create_file']:
 				result['authConfirm'] = True
-	print("sawon_cdoperatorid",sawon_cd)
 	if result['status_cd']=='5' and operatorid==sawon_cd:
 		result['authExec'] = True
 	if operatorid==sawon_cd:
@@ -244,11 +258,13 @@ def getdetail(
 	except PsycopgError as e:
 		pdb.close()
 		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
-	result2 = {"list":[{field:value for field, value in zip(pfields, data)} for data in pdatas]}
-
+	result['list'] = [{field:value for field, value in zip(pfields, data)} for data in pdatas]
+	# print(f'pdatas : {pdatas}')
+	# pdatas [(5677, 46, 'name_kor', '홍길동', "'홍길동1'"), (5678, 46, 'name_kor', '홍길동', "'홍길동2'"), (5679, 46, 'name_kor', '홍길동', "'홍길동3'")]
+	# pfields : ['id', 'ld_pk', 'column_value', 'before_value']
+	print(f'result : {result}')
 	pdb.close()
 
-	result['list'] = result2['list']
 	return result
 
 # 20231110 s.j.b 원장변경 수정
@@ -374,10 +390,33 @@ def update_ledgerdatabase(
 	if not sawon_cd:
 		raise HTTPException(status_code=404, detail="User Not Found")
 	
+	pdb = PostgreLink()
+
+	ld_chk =0
+	try:
+		qry ="""
+                select count(*) cnt
+                  from ledger.ledger_database
+                 where pk=%s
+                   and use_yb ='1'
+                   and status_cd ='3'
+		"""
+		pdb.execute_bind(qry , (ld_pk,))
+		pdatas = pdb.get_datas()
+		ld_chk = pdatas[0][0]
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
+	if ld_chk>0:
+		raise HTTPException(status_code=422, detail="완료건은 변경 할 수 없습니다.")
+
+	print(f'requestSql:{requestSql}')
 	original_filename = ""
 	if not requestSql:
 		if file:
-			base_path = './files/createFiles'
+			print(f'root_dir : {root_dir}')
+			base_path = os.path.join(root_dir,'files','requestFiles')
+			print(f'base_path : {base_path}')
 			original_filename = file.filename
 			# 파일 저장 경로
 			file_path = os.path.join(base_path, original_filename)
@@ -397,29 +436,24 @@ def update_ledgerdatabase(
 
 			with open(file_path, "r", encoding='utf-8') as f:
 				requestSql = f.read()
-		else:
-			raise HTTPException(status_code=422, detail="요청쿼리를 입력하세요.")
+		else: # requestSql 도 없고 파일도 없는 경우엔 SQL검증 체크만 저장
+			# raise HTTPException(status_code=423, detail="요청쿼리를 입력하세요.")
+			try:
+				qry ="""
+						update 		ledger.ledger_database
+						set 		update_date = current_timestamp
+								, 	update_by = %s
+								, 	is_valid = %s
+						where 		pk = %s
+					"""
+				pdb.execute_bind(qry , (sawon_cd, is_valid, ld_pk,))
+				pdb.commit()
+			except PsycopgError as e:
+				pdb.close()
+				raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
 
-	pdb = PostgreLink()
-	ld_chk =0
-	try:
-		qry ="""
-                select count(*) cnt
-                  from ledger.ledger_database
-                 where pk=%s
-                   and use_yb ='1'
-                   and status_cd ='3'
-		"""
-		pdb.execute_bind(qry , (ld_pk,))
-		pdatas = pdb.get_datas()
-		ld_chk = pdatas[0][0]
-	except PsycopgError as e:
-		pdb.close()
-		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
-	if ld_chk>0:
-		raise HTTPException(status_code=422, detail="완료건은 변경 할 수 없습니다.")
-
-	if requestSql != "":
+	print(f'requestSql:{requestSql}')
+	if requestSql:
 		try:
 			qry ="""
 					update 		ledger.ledger_database
@@ -429,55 +463,58 @@ def update_ledgerdatabase(
 							, 	update_by = %s
 							, 	status_cd = %s
 							,	is_valid = %s
+							,	request_file = %s
+							,	create_file = ''
+							,	exec_file = ''
 					where 		pk = %s
 				"""
-			pdb.execute_bind(qry , (requestSql, "", sawon_cd, "2", is_valid, ld_pk,))
+			pdb.execute_bind(qry , (requestSql, "", sawon_cd, "2", is_valid, original_filename, ld_pk,))
 			pdb.commit()
 		except PsycopgError as e:
 			pdb.close()
 			raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
 
-		try:
-			qry =f"""
-					update 		ledger.ledger_database
-					set 		request_file = %s
-						,		create_file = ''
-						,		exec_file = ''
-					where 		pk = %s
-				"""
-			pdb.execute_bind(qry , (original_filename, ld_pk,))
-			pdb.commit()
-		except PsycopgError as e:
-			pdb.close()
-			raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
+		# try:
+		# 	qry =f"""
+		# 			update 		ledger.ledger_database
+		# 			set 		request_file = %s
+		# 				,		create_file = ''
+		# 				,		exec_file = ''
+		# 			where 		pk = %s
+		# 		"""
+		# 	pdb.execute_bind(qry , (original_filename, ld_pk,))
+		# 	pdb.commit()
+		# except PsycopgError as e:
+		# 	pdb.close()
+		# 	raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
 
-		#변경되었기 때문에 생성 목록쿼리도 초기화 
-		ldes_chk =0
+	#변경되었기 때문에 생성 목록쿼리도 초기화 
+	ldes_chk =0
+	try:
+		qry ="""
+				select count(*) cnt
+					from ledger.ledger_database_exec_sql
+					where ld_pk=%s
+					and use_yb ='1'
+		"""
+		pdb.execute_bind(qry , (ld_pk,))
+		pdatas = pdb.get_datas()
+		ldes_chk = pdatas[0][0]
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
+	if ldes_chk>0:
 		try:
 			qry ="""
-                    select count(*) cnt
-                      from ledger.ledger_database_exec_sql
-                     where ld_pk=%s
-                       and use_yb ='1'
-			"""
+					update 	ledger.ledger_database_exec_sql
+						set 	use_yb ='2'
+						where 	ld_pk = %s
+				"""
 			pdb.execute_bind(qry , (ld_pk,))
-			pdatas = pdb.get_datas()
-			ldes_chk = pdatas[0][0]
+			pdb.commit()
 		except PsycopgError as e:
 			pdb.close()
-			raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
-		if ldes_chk>0:
-			try:
-				qry ="""
-                        update 	ledger.ledger_database_exec_sql
-                           set 	use_yb ='2'
-                         where 	ld_pk = %s
-					"""
-				pdb.execute_bind(qry , (ld_pk,))
-				pdb.commit()
-			except PsycopgError as e:
-				pdb.close()
-				raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")			
+			raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")			
 	pdb.close()
 
 
@@ -525,6 +562,25 @@ def create_forecastsql(
 	db = DbLink()
 	pdb = PostgreLink()
 	pdatas=[]
+
+	ld_chk =0
+	try:
+		qry ="""
+                select count(*) cnt
+                  from ledger.ledger_database
+                 where pk=%s
+                   and use_yb ='1'
+                   and status_cd ='3'
+		"""
+		pdb.execute_bind(qry , (ld_pk,))
+		pdatas = pdb.get_datas()
+		ld_chk = pdatas[0][0]
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
+	if ld_chk>0:
+		raise HTTPException(status_code=422, detail="완료건은 변경 할 수 없습니다.")
+		
 	list_field =[]
 	key_list = []
 
@@ -551,24 +607,6 @@ def create_forecastsql(
 	
 	if not request_sql:
 		raise HTTPException(status_code=422, detail="요청쿼리가 없습니다.")
-	
-	ld_chk =0
-	try:
-		qry ="""
-                select count(*) cnt
-                  from ledger.ledger_database
-                 where pk=%s
-                   and use_yb ='1'
-                   and status_cd ='3'
-		"""
-		pdb.execute_bind(qry , (ld_pk,))
-		pdatas = pdb.get_datas()
-		ld_chk = pdatas[0][0]
-	except PsycopgError as e:
-		pdb.close()
-		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
-	if ld_chk>0:
-		raise HTTPException(status_code=422, detail="완료건은 변경 할 수 없습니다.")
 	
 	#초기화 작업
 	if response_sql_chk:
@@ -614,31 +652,65 @@ def create_forecastsql(
 
 	request_sql = request_sql.replace('newincar.','').replace('NEWINCAR.','')
 	sql_items = request_sql.split(";")
-	print(f"sql_items:{sql_items}")
+
+	if len(sql_items)>10001:
+		len_sql_items= len(sql_items)
+		raise HTTPException(status_code=422, detail=f"10000건 까지만 처리 가능합니다. 관리자에게 문의하세요.")
+
+	# print(f"sql_items:{sql_items}")
 	for j, sql_item in enumerate(sql_items, start=1):
 		if sql_item:
 			print(f"sql_item:{j}{sql_item}")
-			parts = sql_item.split()
-			partslower = str(parts[0]).lower()
-			partslistlower = [part.lower() for part in parts]
-			if partslower=="update" or partslower=="delete" or partslower=="insert" or partslower=="create":
+			# print(f"is_valid:{is_valid}")
+			parts = sql_item.split() # 공백 기준으로 나눔
+			print(f"parts:{parts}")
+			if parts and len(parts) > 0:
+				dmlLower = str(parts[0]).lower()
+			else:
+				continue
+			partsListLower = [part.lower() for part in parts] # parts 를 소문자로 변환해서 새로운 list 생성
+			if dmlLower=="update" or dmlLower=="delete" or dmlLower=="insert":
 				return_list = []
-				if partslower=="update" and is_valid=="1":
+				if dmlLower=="update" and is_valid=="1":
 					table_name = str(parts[1]).lower()
-
-					set_clause = "".join(parts[3:partslistlower.index("where")])
-
+					if "where" in partsListLower:
+						#set_clause = "".join(parts[3:partsListLower.index("where")]) # 3부터 where 전까지 set 절
+						#set_clause = sql_item.split("set")[1].split("where")[0].strip()
+						start_index = sql_item.lower().find("set") + len("set")
+						end_index = sql_item.lower().find("where")
+						set_clause = sql_item[start_index:end_index].strip()
+					else:
+						raise HTTPException(status_code=422, detail="WHERE 절에 오류가 있습니다.")
+					print(f'set_clause : {set_clause}')
 					columns = set_clause.split("set_clause") # date타입인 경우에 , 가 있어서 ,로 구분하면 오류발생 columns = set_clause.split(",")
+					first_quote_index = set_clause.find("'")
+					if first_quote_index == -1: # 변경되는 값이 다른 컬럼인 경우
+						raise HTTPException(status_code=422, detail="위 구문은 SQL검증이 불가합니다. SQL검증 체크를 해지하고 저장 하세요.")
+					secund_quote_index = set_clause.find("'",set_clause.find("'")+1)
+					print(f'secund_quote_index : {secund_quote_index}')
+					if ',' in set_clause[secund_quote_index:]:
+						print('set_clause : ',set_clause[secund_quote_index:])
+						raise HTTPException(status_code=422, detail="SET 절은 하나만 입력 가능합니다.")
+					# columns 의 길이가 1보다 크면 오류 처리
+					# if len(columns) > 1:
+					# 	print(f"columns:{columns}")
+					# 	raise HTTPException(status_code=422, detail="SET 절은 하나만 입력 가능합니다.")
 					column_names = ""
 					set_column =[] #변경 컬럼명 list
 					set_value =[] #변경후 값 list
 					set_sql_data =[]
 					for column in columns:
 						print(f"column: {column}")
-						values = column.split("=",1)
+						enc_index = str(column).lower().find("xx1.enc_varchar2_ins(")
+						if enc_index != -1:
+							raise HTTPException(status_code=422, detail="위 구문은 SQL검증이 불가합니다. SQL검증 체크를 해지하고 저장 하세요.")
+						dec_index = str(column).lower().find("xx1.dec_varchar2_sel(")
+						if dec_index != -1:
+							raise HTTPException(status_code=422, detail="위 구문은 SQL검증이 불가합니다. SQL검증 체크를 해지하고 저장 하세요.")
+						values = column.split("=",1) 
 						print(f"values{values}")
-						values0 = values[0].lstrip().rstrip()
-						values1 = values[1].lstrip().rstrip()
+						values0 = values[0].strip()
+						values1 = values[1].strip()
 
 						to_date_index = str(values1).lower().find("to_date(")
 						print(f"to_date_index:{to_date_index}")
@@ -659,7 +731,6 @@ def create_forecastsql(
 							set_value.append(values1)
 							set_sql_data.append(values1)
 							# to_enc_index = str(values[1]).lower().find("xx1.enc_varchar2_ins(")
-
 							# if to_enc_index != -1:
 							# 	remaining_string = values[1][to_enc_index + len("xx1.enc_varchar2_ins("):]
 							# 	enc_argument1 = remaining_string.split(",", 1)[0]
@@ -685,7 +756,7 @@ def create_forecastsql(
 						print("column_names",column_names)
 						
 
-					where_clause = "".join(sql_item[str(sql_item).lower().index("where"):])
+					where_clause = "".join(sql_item[str(sql_item).lower().index("where"):]) # 전체 sql에서 where 부터 끝까지 where절
 
 
 					try:
@@ -716,9 +787,9 @@ def create_forecastsql(
 						
 						# 변환된 SELECT 문 생성
 						#key_list = ['company_cd','sawon_cd']
-						column_names_list = [col.strip() for col in column_names.split(',')]
+						column_names_list = [col.strip() for col in column_names.split(',')] # , 로 나누고 앞뒤공백 제거해서 새로운 list 생성
 						for key in key_list:
-							if key not in column_names_list:
+							if key not in column_names_list: # 변경되는 컬럼에 key 없으면 포함
 								column_names += f", {key}"
 					except OracleError as e:
 						db.close()
@@ -736,8 +807,8 @@ def create_forecastsql(
 					# response_sql 실행
 					try:
 						bind_arr={}
-						re_response_sql = response_sql.replace(';','')
-						print(f"re_response_sql:{re_response_sql}")
+						# re_response_sql = response_sql.replace(';','')
+						# print(f"re_response_sql:{re_response_sql}")
 						db.execute(response_sql,{})
 						pfields = db.get_field_names()
 						pdatas = db.get_datas()
@@ -798,7 +869,7 @@ def create_forecastsql(
 								after_sql_data = set_sql_data[index]
 								list_json = {"column_value":lower_field,"before_value":value,"after_value":after_value,"after_sql_data":after_sql_data}
 								forecast_list.append(list_json)
-								#print(result1)
+								print(f'forecast_list : {forecast_list}')
 								# update_sql = f"update {table_name} set {field}={after_value} "
 								# print(update_sql)
 							if lower_field in key_list:
@@ -903,7 +974,7 @@ def create_forecastsql(
 					# 	pdb.close()
 					# 	raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
 					for data in return_list:
-						print(f"data{data}")
+						print(f"data : {data}")
 						try:
 							qry = f"""
 									insert into 	ledger.ledger_database_exec_sql
@@ -939,7 +1010,7 @@ def create_forecastsql(
 							db.close()
 							pdb.close()
 							raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
-				elif partslower=="delete" and is_valid=="1":#delete
+				elif dmlLower=="delete" and is_valid=="1":#delete
 					table_name = parts[2] if parts[1]=='from' else parts[1]
 
 					column_names = ""
@@ -1140,7 +1211,7 @@ def create_forecastsql(
 							db.close()
 							pdb.close()
 							raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
-				elif partslower=="insert" and is_valid=="1":#insert
+				elif dmlLower=="insert" and is_valid=="1":#insert
 					sql_item = sql_item.replace('\r\n',' ').strip()
 					try:
 						if j>1:
@@ -1158,7 +1229,9 @@ def create_forecastsql(
 					status_cd = '1'
 					try:
 						db.execute(sql_item,{})
-					except PsycopgError as e:
+					except OracleError as e:
+						print(f"wwwwwwwwwwwwwwwwwwwwww{sql_item}")
+						db.rollback()
 						status_cd = '2'
 					db.rollback()
 					try:
@@ -1198,8 +1271,8 @@ def create_forecastsql(
 						raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
 
 				else:
-					sql_item = sql_item.replace('\r','').replace('\n','')
-					print(f"sql_item:{sql_item}")
+					sql_item = sql_item.replace('\r',' ')#.replace('\n',' ')
+					print(f"is_valid2_sql_item:{sql_item}")
 					try:
 						if j>1:
 							sql = f"update ledger.ledger_database set response_sql=response_sql||'\n'||%s where pk=%s"
@@ -1214,10 +1287,10 @@ def create_forecastsql(
 						print(f"PostgreSQL Database error: {e}")
 						raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
 					status_cd = '1'
-					try:
-						db.execute(sql_item,{})
-					except PsycopgError as e:
-						status_cd = '2'
+					# try:
+					# 	db.execute(sql_item,{})
+					# except PsycopgError as e:
+					# 	status_cd = '2'
 					db.rollback()
 					try:
 						qry = f"""
@@ -1260,7 +1333,7 @@ def create_forecastsql(
 				pdb.close()
 				db.close()
 				raise HTTPException(status_code=404, detail="request sql error")
-	
+
 	#파일로 처리한 건은 파일 생성
 	if request_file!="" :
 		try:
@@ -1282,7 +1355,8 @@ def create_forecastsql(
 		current_time = datetime.now()
 		formatted_time = current_time.strftime("%Y%m%d%H%M%S")
 		file_name = "createFile_"+str(ld_pk)+"_"+formatted_time+".txt"
-		output_file_path = os.path.join('./files/createFiles', file_name)
+		base_path = os.path.join(root_dir,'files','createFiles')
+		output_file_path = os.path.join(base_path, file_name)
 		with open(output_file_path, 'w', encoding='utf-8') as txt_file:
 			txt_file.write(response_sql)
 
@@ -1430,7 +1504,7 @@ def confirm_forecastsql(
 		try:
 			qry = """
                 update info_confirm_list
-                   set use_yb = '1'
+                   set use_yb = '2'
                  where arc_pk=:arc_pk
                    and use_yb ='1'
                    and status_cd in ('9','13')
@@ -1642,56 +1716,98 @@ def exec_forecastsql(
 		json_data = {}
 		qry = data[5]
 		#delete 는 실행전 변경 row data 를 파일로 저장해서 복구시 사용
-		# parts = str(qry).lower().split()
-		# if parts[0]=="delete":
-		# 	backupsql = str(qry).replace("delete","select * from ")
-		# 	#print("backupsql",backupsql)
-		# 	db.execute(backupsql,{})
-		# 	pfields2 = db.get_field_names()
-		# 	pdatas2 = db.get_datas()
-		# 	print(">>", pdatas2)
-		# 	for i, data2 in enumerate(pdatas2, start=1):
-		# 		append_data = {}
-		# 		zipped_data = zip(pfields2, data2)
-		# 		append_data = {field: value for field, value in zipped_data}
-		# 	result_dict.append(append_data)
+		parts = str(qry).lower().split()
+		if parts[0]=="delete":
+			table_name = parts[2] if parts[1]=='from' else parts[1]
+			column_names = ""
+			where_clause = "".join(qry[str(qry).lower().index("where"):])
+			# backupsql = str(qry).replace("delete","select * from ")
+			backupsql = "select * from " + table_name + " " + where_clause
+			print("backupsql : ",backupsql)
+			try:
+				db.execute(backupsql,{})
+				pfields2 = db.get_field_names()
+				pdatas2 = db.get_datas()
+				print(">>", pdatas2)
+				for i, data2 in enumerate(pdatas2, start=1):
+					append_data = {}
+					zipped_data = zip(pfields2, data2)
+					append_data = {field: value for field, value in zipped_data}
+					result_dict.append(append_data)
+			except OracleError as e:
+				json_data ={
+					'id':data[0],
+					'result_cd':'3',
+					}
+				err_chk +=1
+				results.append(json_data)
+				continue
+				# db.close()
+				# pdb.close()
+				# raise HTTPException(status_code=500, detail=f"Oracle Database error: {e}")
 		#전체 실행
+		update_result_cd = ''
+		# try:
+		# 	db.execute(qry,{})
+		# 	json_data ={
+		# 		'id':data[0],
+		# 		'result_cd':'2',
+		# 		}
+		# 	update_result_cd = '2'
+		# 	#pdb.commit()
+		# except Exception as e:
+		# 	json_data ={
+		# 		'id':data[0],
+		# 		'result_cd':'3',
+		# 		}
+		# 	update_result_cd = '3'
+		# 	#print("예외발생",e)
+		# 	#db.rollback()
+		# 	#pdb.close()
+		# 	err_chk +=1
+		# results.append(json_data)
+
 		try:
 			db.execute(qry,{})
-			json_data ={
-				'id':data[0],
-				'ld_pk':data[1], 
-				'column_value':data[2], 
-				'before_value':data[3], 
-				'after_value':data[4], 
-				'forecast_sql':qry, 
-				'status_cd':data[6],
-				'status_nm':data[7],
-				'result_cd':'2',
-				'result_nm':'성공',
-				}
-			#pdb.commit()
+			update_result_cd = '2'
 		except Exception as e:
+			update_result_cd = '3'
 			json_data ={
 				'id':data[0],
-				'ld_pk':data[1], 
-				'column_value':data[2], 
-				'before_value':data[3], 
-				'after_value':data[4], 
-				'forecast_sql':qry, 
-				'status_cd':data[6],
-				'status_nm':data[7],
 				'result_cd':'3',
-				'result_nm':'실패',
 				}
-			#print("예외발생",e)
-			#db.rollback()
-			#pdb.close()
 			err_chk +=1
-		results.append(json_data)
+			results.append(json_data)
+
+		# try:
+		# 	#print(result['id'],result['status_cd'])
+		# 	qry = """
+		# 			update 		ledger.ledger_database_exec_sql 
+		# 			set 		result_cd = %s 
+		# 			where 		pk =%s
+		# 		"""
+		# 	pdb.execute_bind(qry,(update_result_cd,data[0],))
+		# except PsycopgError as e:
+		# 	db.close()
+		# 	pdb.close()
+		# 	raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
 	#한개라도 실패면 rollback
-	print(">>", results)
-	print(f"err_chk>> {err_chk}")
+	# print(">>", results)
+	# print(f"err_chk>> {err_chk}")
+	# 전체 성공으로 업데이트하고 아래서 실패건만 다시 업데이트
+	try:
+		#print(result['id'],result['status_cd'])
+		qry = """
+				update 		ledger.ledger_database_exec_sql 
+				set 		result_cd = %s 
+				where 		ld_pk =%s
+			"""
+		pdb.execute_bind(qry,("2",ld_pk,))
+	except PsycopgError as e:
+		db.close()
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
+	print(f'err_chk : {err_chk}')
 	if err_chk == 0:
 		db.commit()
 		#pdb.close()
@@ -1721,7 +1837,68 @@ def exec_forecastsql(
 			db.close()
 			pdb.close()
 			raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
+		try:
+			qry = """
+					select info_request_pk
+					from ledger.ledger_database
+					where pk=%s
+					and use_yb ='1'
+			"""
+			pdb.execute_bind(qry,(ld_pk,))
+			pfields = pdb.get_field_names()
+			pdatas = pdb.get_datas()
+		except PsycopgError as e:
+			db.close()
+			pdb.close()
+			raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
+		info_request_pk = pdatas[0][0]
+		print(f"info_request_pk{info_request_pk}")
+		ld_chk =0
+		try:
+			qry ="""
+					select count(*) cnt
+					from info_confirm_list
+					where arc_pk=:arc_pk
+					and use_yb ='1'
+					and status_cd in ('9','13','6','10')
+			"""
+			db.execute(qry,{"arc_pk":info_request_pk})
+			fields = db.get_field_names()
+			datas = db.get_datas()
+			ld_chk = datas[0][0]
+		except OracleError as e:
+			db.close()
+			pdb.close()
+			raise HTTPException(status_code=500, detail=f"Oracle Database error: {e}")
+		print(f'ld_chk : {ld_chk}')
+		if ld_chk>0:
+			try:
+				qry = """
+					update info_confirm_list
+					set use_yb = '2'
+					where arc_pk=:arc_pk
+					and use_yb ='1'
+					and status_cd in ('9','13','6','10')
+					"""
+				db.execute(qry, {"arc_pk":info_request_pk})
+			except OracleError as e:
+				db.close()
+				pdb.close()
+				raise HTTPException(status_code=500, detail=f"Oracle Database error: {e}")
+		try:
+			qry = """
+                    update info_request
+                       set status_cd ='5'
+                     where pk = :info_request_pk
+			"""
+			db.execute(qry,{"info_request_pk":info_request_pk})
+		except OracleError as e:
+			db.close()
+			pdb.close()
+			raise HTTPException(status_code=500, detail=f"oracle Database error: {e}")
+		db.commit()
 	#실행결과 저장
+	print(f'results : {results}')
 	for result in results:
 		try:
 			#print(result['id'],result['status_cd'])
@@ -1736,32 +1913,34 @@ def exec_forecastsql(
 			db.close()
 			pdb.close()
 			raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
-	print(f"result_dict{result_dict}")
+	# print(f"result_dict{result_dict}")
 	#db.rollback()
 	#pdb.rollback()
-	json_data_file = json.dumps({'list': result_dict}, indent=4, ensure_ascii=False, default=default_serializer)
-	#json_data_file = json.dumps({'list': result_dict}, indent=4, ensure_ascii=False)
-	current_time = datetime.now()
-	formatted_time = current_time.strftime("%Y%m%d%H%M%S")
-	file_name = str(ld_pk)+"_"+formatted_time+".json"
-	output_file_path = os.path.join('./datas', file_name)
-	with open(output_file_path, 'w', encoding='utf-8') as json_file:
-		json_file.write(json_data_file)
+	if len(result_dict)>0:
+		json_data_file = json.dumps({'list': result_dict}, indent=4, ensure_ascii=False, default=default_serializer)
+		#json_data_file = json.dumps({'list': result_dict}, indent=4, ensure_ascii=False)
+		current_time = datetime.now()
+		formatted_time = current_time.strftime("%Y%m%d%H%M%S")
+		file_name = str(ld_pk)+"_"+formatted_time+".json"
+		base_path = os.path.join(root_dir,'datas')
+		output_file_path = os.path.join(base_path, file_name)
+		with open(output_file_path, 'w', encoding='utf-8') as json_file:
+			json_file.write(json_data_file)
 
-	try:
-		qry = """
-					update 		ledger.ledger_database 
-					set 		backup_file = %s 
-					where 		pk = %s
-			"""
-		pdb.execute_bind(qry,(file_name, ld_pk,))
-	except PsycopgError as e:
-		db.close()
-		pdb.close()
-		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
-
+		try:
+			qry = """
+						update 		ledger.ledger_database 
+						set 		backup_file = %s 
+						where 		pk = %s
+				"""
+			pdb.execute_bind(qry,(file_name, ld_pk,))
+		except PsycopgError as e:
+			db.close()
+			pdb.close()
+			raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")
+	
 	pdb.commit()
-	create_execfiles(ld_pk)
+	# create_execfiles(ld_pk)
 
 	pdb.close()
 	db.close()
@@ -2478,105 +2657,199 @@ def download_file(
 @router.post("/test", name="원장변경 접수현황 검토완료", description="", status_code=201)
 def confirm_forecastsql(
 	ld_pk: int,
-	access_token:str=Depends(sc.get_access_token),
-	user_service:UserService=Depends(UserService),
+	# access_token:str=Depends(sc.get_access_token),
+	# user_service:UserService=Depends(UserService),
 ):
-	code:str = user_service.decode_jwt(access_token=access_token)
-	sawon_cd:str|None = user_service.get_regist_info(code=code)
-	if not sawon_cd:
-		raise HTTPException(status_code=404, detail="User Not Found")
-	
-	pdb = PostgreLink()	
-# CREATE SCHEMA JOB
-# GRANT USAGE ON SCHEMA JOB TO i1611006;
-# GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA JOB TO i1611006;
-# ALTER TABLE JOB.JOB_REQUEST ADD COLUMN BUILD_NUMBER INTEGER
-				
-	try:
-		qry = """
-CREATE SEQUENCE job.seq_job_templates
-	INCREMENT BY 1
-	MINVALUE 1
-	MAXVALUE 9223372036854775807
-	START 1
-	CACHE 1
-	NO CYCLE
-		"""
-		pdb.execute(qry)
-	except PsycopgError as e:
-		pdb.close()
-		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
-	try:
-		qry = """
-CREATE SEQUENCE job.seq_job_request
-	INCREMENT BY 1
-	MINVALUE 1
-	MAXVALUE 9223372036854775807
-	START 1
-	CACHE 1
-	NO CYCLE
-		"""
-		pdb.execute(qry)
-	except PsycopgError as e:
-		pdb.close()
-		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
+	# code:str = user_service.decode_jwt(access_token=access_token)
+	# sawon_cd:str|None = user_service.get_regist_info(code=code)
+	# if not sawon_cd:
+	# 	raise HTTPException(status_code=404, detail="User Not Found")
+	#
+# 	db = DbLink()
 # 	try:
 # 		qry = """
-# insert into public.commcode
-# values
-# (14,'1611867', '서정배', '서정배',1, 1, current_timestamp, '1611006', current_timestamp, '1611006')
+# update    info_request
+# set     status_cd = '7'
+# where   pk =4832
 # 		"""
-# 		pdb.execute(qry)
-# 	except PsycopgError as e:
-# 		pdb.close()
-# 		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")	
-											
-		 
+# 		db.execute(qry,{})
+# 	except OracleError as e:
+# 		db.close()
+# 		raise HTTPException(status_code=500, detail=f"oracle Database error: {e}")
+	
 # 	try:
 # 		qry = """
-# CREATE TABLE JOB.JOB_TEMPLATES (
-#     PK INTEGER NOT NULL,
-#     NAME VARCHAR(50),
-#     GUBUN VARCHAR(20),
-#     STATUS VARCHAR(20),
-#     DESCRIPTION TEXT,
-#     EXECUTION_SCRIPT TEXT,
-#     PARAM1 VARCHAR(20),
-#     PARAM2 VARCHAR(20),
-#     PARAM3 VARCHAR(20),
-#     USE_YB CHAR(1),
-#     CREATE_DATE TIMESTAMP,
-#     CREATE_BY VARCHAR(20),
-#     CREATE_NAME VARCHAR(20),
-#     UPDATE_DATE TIMESTAMP,
-#     UPDATE_BY VARCHAR(20),
-#     UPDATE_NAME VARCHAR(20)
-# )
-# 			"""
-# 		pdb.execute(qry)
-# 	except PsycopgError as e:
-# 		pdb.close()
-# 		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
-
+# update    info_confirm_list
+# set     create_date = to_date('20240403112015','yyyymmddhh24miss')
+# where   arc_pk = 5084
+# and     status_cd ='9'
+# 		"""
+# 		db.execute(qry,{})
+# 	except OracleError as e:
+# 		db.close()
+# 		raise HTTPException(status_code=500, detail=f"oracle Database error: {e}")
+	
 # 	try:
 # 		qry = """
-# CREATE TABLE JOB.JOB_REQUEST (
-#     PK INTEGER NOT NULL,
-#     JT_PK INTEGER,
-#     NAME VARCHAR(50),
-#     STATUS VARCHAR(20),
-#     START_DATE TIMESTAMP,
-#     END_DATE TIMESTAMP,
-#     LOG TEXT,
-#     USE_YB CHAR(1),
-#     CREATE_DATE TIMESTAMP,
-#     CREATE_BY VARCHAR(20)
-# )
-# 			"""
-# 		pdb.execute(qry)
-# 	except PsycopgError as e:
-# 		pdb.close()
-# 		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")				 
+# update    info_confirm_list
+# set     create_date = to_date('20240403112017','yyyymmddhh24miss')
+# where   arc_pk = 5084
+# and     status_cd ='13'
+# 		"""
+# 		db.execute(qry,{})
+# 	except OracleError as e:
+# 		db.close()
+# 		raise HTTPException(status_code=500, detail=f"oracle Database error: {e}")
+	
+	# db.commit()
+	# db.close()
 
+	pdb = PostgreLink()	
+
+	try:
+		qry = """
+update 	job.job_templates
+set 	execution_script = 'logFile="/home/batch/calc_susuryo/log/fee200_"$(date "+%Y%m%d%H%M")".log"
+nohup /bin/bash /home/batch/calc_susuryo/fee200.sh > ${logFile}'
+where 	pk = 97
+		"""
+		pdb.execute(qry)
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
 	pdb.commit()
+	try:
+		qry = """
+update 	job.job_templates
+set 	execution_script = 'logFile="/home/batch/calc_susuryo/log/fee400_"$(date "+%Y%m%d%H%M")".log"
+nohup /bin/bash /home/batch/calc_susuryo/fee400.sh > ${logFile}'
+where 	pk = 98
+		"""
+		pdb.execute(qry)
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
+	pdb.commit()
+	try:
+		qry = """
+update 	job.job_templates
+set 	execution_script = 'logFile="/home/batch/calc_susuryo/log/fee180_"$(date "+%Y%m%d%H%M")".log"
+nohup /bin/bash /home/batch/calc_susuryo/fee180.sh > ${logFile}'
+where 	pk = 92
+		"""
+		pdb.execute(qry)
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
+	pdb.commit()		
+	try:
+		qry = """
+update 	job.job_templates
+set 	execution_script = 'logFile="/home/batch/calc_susuryo/log/fee160_"$(date "+%Y%m%d%H%M")".log"
+nohup /bin/bash /home/batch/calc_susuryo/fee160.sh > ${logFile}'
+where 	pk = 93
+		"""
+		pdb.execute(qry)
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
+	pdb.commit()	
+	try:
+		qry = """
+update 	job.job_templates
+set 	execution_script = 'logFile="/home/batch/calc_susuryo/log/fee300_"$(date "+%Y%m%d%H%M")".log"
+nohup /bin/bash /home/batch/calc_susuryo/fee300.sh > ${logFile}'
+where 	pk = 96
+		"""
+		pdb.execute(qry)
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
+	pdb.commit()	
+	try:
+		qry = """
+update 	job.job_templates
+set 	execution_script = 'logFile="/home/batch/calc_susuryo/log/fee550_"$(date "+%Y%m%d%H%M")".log"
+nohup /bin/bash /home/batch/calc_susuryo/fee550.sh > ${logFile}'
+where 	pk = 99
+		"""
+		pdb.execute(qry)
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
+	pdb.commit()	
+	try:
+		qry = """
+update 	job.job_templates
+set 	execution_script = 'logFile="/home/batch/calc_susuryo/log/fee450_"$(date "+%Y%m%d%H%M")".log"
+nohup /bin/bash /home/batch/calc_susuryo/fee450.sh > ${logFile}'
+where 	pk = 100
+		"""
+		pdb.execute(qry)
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
+	pdb.commit()	
+	try:
+		qry = """
+update job.job_templates
+set 	name = '상품비교설명서 데이터 추출-영업부문총괄(매주 수요일)'
+where pk =63
+		"""
+		pdb.execute(qry)
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
+	pdb.commit()
+	try:
+		qry = """
+insert into job.job_templates
+(pk, name, gubun, status, description, execution_script, build_schedule, use_yb, create_date, create_by, create_name, update_date, update_by, update_name)
+values
+(nextval('job.seq_job_templates')
+, '12차월-관리자'
+, '3'
+, '1'
+, ''
+, 'sh /home/project/batchFile/script/dataPrc045.sh'
+, '00 09 1 * *'
+, '1'
+, current_timestamp
+, '1611006'
+, '오승환'
+, current_timestamp
+, '1611006'
+, '오승환')
+		"""
+		pdb.execute(qry)
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
+	pdb.commit()
+	try:
+		qry = """
+insert into job.job_templates
+(pk, name, gubun, status, description, execution_script, build_schedule, use_yb, create_date, create_by, create_name, update_date, update_by, update_name)
+values
+(nextval('job.seq_job_templates')
+, 'FA고지의무 데이터 추출-PA부문총괄(매주 금요일)'
+, '3'
+, '1'
+, ''
+, 'sh /home/project/batchFile/script/dataExt010.sh 001046'
+, '30 08 * * 5'
+, '1'
+, current_timestamp
+, '1611006'
+, '오승환'
+, current_timestamp
+, '1611006'
+, '오승환')
+		"""
+		pdb.execute(qry)
+	except PsycopgError as e:
+		pdb.close()
+		raise HTTPException(status_code=500, detail=f"PostgreSQL Database error: {e}")		
+	pdb.commit()									
+																											 
 	pdb.close()
